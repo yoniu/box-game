@@ -1,20 +1,31 @@
 #include <windows.h>
+#include <ctime>
+#include <cstdlib>
+
 #define ROW 20
 #define COL 10
 #define GRID 50
 #define WIDTH ROW * GRID
 #define HEIGHT COL * GRID
+#define BOXLENGTH 3
 
 struct Position {
 	int x;
 	int y;
 };
-enum BlockType {
+struct PositionEx { // 箱子位置
+	int x;
+	int y;
+	bool move; // 是否可以移动
+};
+enum BlockType { // 板块类型
 	Empty,
 	Box,
-	Aim
+	Aim,
+	Stone
 };
 
+Position GetRandomPosition();
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 int WINAPI WinMain(
 	HINSTANCE hInstance,
@@ -83,8 +94,11 @@ LRESULT CALLBACK WndProc(
 	static HDC hdcMem, hdcBox;
 	static HBITMAP hbm;
 	static RECT rt;
-	static Position my, boxPosition;
+	static Position my, aimPosition[BOXLENGTH], stonePosition[BOXLENGTH];
+	static PositionEx boxPosition[BOXLENGTH];
 	static BlockType blockType[ROW][COL];
+	static int currentBox, success;
+	static HPEN hPen;
 	switch (message)
 	{
 	case WM_CREATE:
@@ -118,41 +132,123 @@ LRESULT CALLBACK WndProc(
 			HBITMAP box = (HBITMAP)LoadImage(NULL, L"box1.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 			SelectObject(hdcBox, box);
 			DeleteObject(box);
+			// 随机数
+			srand(time(0));
+			// 创建目标位置
+			success = 0;
+			hPen = CreatePen(PS_SOLID, 3, RGB(0, 229, 0));
+			SelectObject(hdcMem, hPen);
+			for (int i = 0; i < BOXLENGTH; i++) 
+			{
+				aimPosition[i] = GetRandomPosition();
+				blockType[aimPosition[i].x][aimPosition[i].y] = Aim;
+				Rectangle(hdcMem, aimPosition[i].x * GRID, aimPosition[i].y * GRID, aimPosition[i].x * GRID + GRID, aimPosition[i].y * GRID + GRID);
+			}
+			DeleteObject(hPen);
+			// 创建障碍物位置
+			HDC hdcStone = CreateCompatibleDC(hdc);
+			HBITMAP stone = (HBITMAP)LoadImage(NULL, L"stone.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+			SelectObject(hdcStone, stone);
+			DeleteObject(stone);
+			for (int i = 0; i < BOXLENGTH; i++)
+			{
+				stonePosition[i] = GetRandomPosition();
+				blockType[stonePosition[i].x][stonePosition[i].y] = Stone;
+				BitBlt(hdcMem, stonePosition[i].x * GRID, stonePosition[i].y * GRID, GRID, GRID, hdcStone, 0, 0, SRCCOPY);
+			}
+			DeleteObject(hdcStone);
+			// 创建到达目标画笔颜色
+			hPen = CreatePen(PS_SOLID, 3, RGB(229, 0, 0));
+			SelectObject(hdcMem, hPen);
 			// 初始化箱子位置
-			boxPosition = { 0 , 0 };
-			blockType[boxPosition.x][boxPosition.y] = Box;
+			currentBox = 0;
+			for (int i = 0; i < BOXLENGTH; i++) 
+			{
+				Position temp = GetRandomPosition();
+				boxPosition[i].x = temp.x;
+				boxPosition[i].y = temp.y;
+				boxPosition[i].move = true;
+				blockType[boxPosition[i].x][boxPosition[i].y] = Box;
+			}
 			ReleaseDC(hWnd, hdc);
 		}
 		break;
 	case WM_PAINT:
 		hdc = BeginPaint(hWnd, &ps);
 		FillRect(hdc, &rt, (HBRUSH)GetStockObject(WHITE_BRUSH));
+		// 载入双缓冲
 		BitBlt(hdc, my.x, my.y, WIDTH, HEIGHT, hdcMem, 0, 0, SRCCOPY);
-		BitBlt(hdc, my.x + boxPosition.x * GRID, my.y + boxPosition.y * GRID, GRID, GRID, hdcBox, 0, 0, SRCCOPY); // BLACKNESS
+		// 绘制箱子
+		for(int i = 0; i < BOXLENGTH; i++)
+			BitBlt(hdc, my.x + boxPosition[i].x * GRID, my.y + boxPosition[i].y * GRID, GRID, GRID, hdcBox, 0, 0, currentBox == i ? BLACKNESS : SRCCOPY); // BLACKNESS
+		// 游戏成功
+		if (success == BOXLENGTH)
+			DrawText(hdc, L"游戏成功", -1, &rt, DT_CENTER);
 		EndPaint(hWnd, &ps);
 		return 0;
 	case WM_KEYDOWN:
-		if (wParam == VK_ESCAPE)
+		if (wParam == VK_ESCAPE) return (SendMessageW(hWnd, WM_DESTROY, NULL, NULL), 0);
+		blockType[boxPosition[currentBox].x][boxPosition[currentBox].y] = Empty;
+		switch (wParam)
 		{
-			return (SendMessageW(hWnd, WM_DESTROY, NULL, NULL), 0);
+			case VK_UP:
+			{
+				if (boxPosition[currentBox].y != 0 && boxPosition[currentBox].move) {
+					if (blockType[boxPosition[currentBox].x][boxPosition[currentBox].y - 1] == Empty)
+						boxPosition[currentBox].y -= 1;
+					else if (blockType[boxPosition[currentBox].x][boxPosition[currentBox].y - 1] == Aim) {
+						success++;
+						boxPosition[currentBox].y -= 1;
+						boxPosition[currentBox].move = false;
+						Rectangle(hdcMem, boxPosition[currentBox].x * GRID, boxPosition[currentBox].y * GRID, boxPosition[currentBox].x * GRID + GRID, boxPosition[currentBox].y * GRID + GRID);
+					}
+				}
+			}
+			break;
+			case VK_DOWN:
+			{
+				if (boxPosition[currentBox].y < COL - 1 && boxPosition[currentBox].move) {
+					if (blockType[boxPosition[currentBox].x][boxPosition[currentBox].y + 1] == Empty)
+						boxPosition[currentBox].y += 1;
+					else if (blockType[boxPosition[currentBox].x][boxPosition[currentBox].y + 1] == Aim) {
+						success++;
+						boxPosition[currentBox].y += 1;
+						boxPosition[currentBox].move = false;
+						Rectangle(hdcMem, boxPosition[currentBox].x * GRID, boxPosition[currentBox].y * GRID, boxPosition[currentBox].x * GRID + GRID, boxPosition[currentBox].y * GRID + GRID);
+					}
+				}
+			}
+			break;
+			case VK_LEFT:
+			{
+				if (boxPosition[currentBox].x != 0 && boxPosition[currentBox].move) {
+					if (blockType[boxPosition[currentBox].x - 1][boxPosition[currentBox].y] == Empty)
+						boxPosition[currentBox].x -= 1;
+					else if (blockType[boxPosition[currentBox].x - 1][boxPosition[currentBox].y] == Aim) {
+						success++;
+						boxPosition[currentBox].x -= 1;
+						boxPosition[currentBox].move = false;
+						Rectangle(hdcMem, boxPosition[currentBox].x * GRID, boxPosition[currentBox].y * GRID, boxPosition[currentBox].x * GRID + GRID, boxPosition[currentBox].y * GRID + GRID);
+					}
+				}
+			}
+			break;
+			case VK_RIGHT:
+			{
+				if (boxPosition[currentBox].x < ROW - 1 && boxPosition[currentBox].move) {
+					if (blockType[boxPosition[currentBox].x + 1][boxPosition[currentBox].y] == Empty)
+						boxPosition[currentBox].x += 1;
+					else if (blockType[boxPosition[currentBox].x + 1][boxPosition[currentBox].y] == Aim) {
+						success++;
+						boxPosition[currentBox].x += 1;
+						boxPosition[currentBox].move = false;
+						Rectangle(hdcMem, boxPosition[currentBox].x * GRID, boxPosition[currentBox].y * GRID, boxPosition[currentBox].x * GRID + GRID, boxPosition[currentBox].y * GRID + GRID);
+					}
+				}
+			}
+			break;
 		}
-		else
-		{
-			blockType[boxPosition.x][boxPosition.y] = Empty;
-			if (wParam == VK_UP) {
-				boxPosition.y -= (boxPosition.y == 0) ? 0 : 1;
-			}
-			else if (wParam == VK_DOWN) {
-				boxPosition.y += (boxPosition.y >= COL - 1) ? 0 : 1;
-			}
-			else if (wParam == VK_LEFT) {
-				boxPosition.x -= (boxPosition.x == 0) ? 0 : 1;
-			}
-			else if (wParam == VK_RIGHT) {
-				boxPosition.x += (boxPosition.x >= ROW - 1) ? 0 : 1;
-			}
-		}
-		blockType[boxPosition.x][boxPosition.y] = Box;
+		blockType[boxPosition[currentBox].x][boxPosition[currentBox].y] = Box;
 		InvalidateRect(hWnd, NULL, true);
 		return 0;
 	case WM_LBUTTONDOWN:
@@ -160,9 +256,16 @@ LRESULT CALLBACK WndProc(
 			int x = (LOWORD(lParam) - my.x) / 50,
 				y = (HIWORD(lParam) - my.y) / 50;
 			if (x > ROW - 1 || y > COL - 1 || x < 0 || y < 0) return 0;
-			wchar_t b[10];
+			/*wchar_t b[10];
 			wsprintf(b, L"%d, %d, %d", blockType[x][y], x, y);
-			MessageBox(NULL, b, L"MessageBox弹出整型数据", 0);
+			MessageBox(NULL, b, L"MessageBox弹出整型数据", 0);*/
+			for(int i = 0; i < BOXLENGTH; i++)
+				if (x == boxPosition[i].x && y == boxPosition[i].y)
+				{
+					currentBox = i;
+					InvalidateRect(hWnd, NULL, true);
+					break;
+				}
 		}
 		return 0;
 	case WM_SIZE:
@@ -176,8 +279,16 @@ LRESULT CALLBACK WndProc(
 		DeleteObject(hdcMem);
 		DeleteObject(hdcBox);
 		DeleteObject(hbm);
+		DeleteObject(hPen);
 		PostQuitMessage(0);
 		return 0;
 	}
 	return DefWindowProc(hWnd, message, wParam, lParam);
+}
+Position GetRandomPosition() 
+{
+	Position m;
+	m.x = rand() % (ROW - 0) + 0;
+	m.y = rand() % (COL - 0) + 0;
+	return m;
 }
